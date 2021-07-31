@@ -40,6 +40,9 @@ class Output:
         if os.path.isfile(file_name):
             os.remove(file_name)
     
+    def get_file_name(self):
+        return self._file_name
+
     def write(self, promotion):
         now = datetime.now()
         time_str = date_time = now.strftime("%Y/%m/%d %H:%M:%S")
@@ -82,6 +85,40 @@ class MySession:
             except:
                 time.sleep(i + 1)
 
+from GoogleServices import GoogleServices
+from googleapiclient.http import MediaFileUpload
+
+class ResultUploader:
+    def __init__(self):
+        google = GoogleServices()
+        self._drive = google.get_drive_service()
+    
+    def upload(self, file_name):
+        now = datetime.now()
+        time_str = date_time = now.strftime("%Y%m%d %H%M%S")
+
+        folder_id = self._get_id_of_JD_folder()
+        self._upload_task(folder_id, file_name, time_str + ".txt")
+
+    def _upload_task(self, folder_id, local_file_name, upload_file_name):
+        file_metadata = {
+            "name": upload_file_name,
+            "mimeType": "text/plain",
+            "parents": [ folder_id ]
+        }
+        media = MediaFileUpload(local_file_name, mimetype="text/plain")
+        file = self._drive.files().create(body=file_metadata, media_body=media, fields='id').execute()
+
+    def _get_id_of_JD_folder(self):
+        results = self._drive.files().list(
+            fields="files(id)",
+            q="mimeType='application/vnd.google-apps.folder' and name='JD' and trashed=false").execute()
+        items = results.get("files", [])
+        if len(items) == 0:
+            raise ValueError("JD folder is not found")
+        folder_id = items[0].get("id")
+        return folder_id
+
 class Engine():
     def __init__(self):
         self._config = Configuration("config.json")
@@ -90,6 +127,7 @@ class Engine():
         self._output_unmatch = Output("unmatch.txt")
         self._avoid_login_limit = 10
         self._reset_session()
+        self._result_uploader = ResultUploader()
 
     def _reset_session(self):
         self._session = MySession(self._log)
@@ -171,6 +209,9 @@ class Engine():
                         self._output.write(promotion)
                     
                     time.sleep(random.randint(5, 35))
+        
+        if os.path.isfile(self._output.get_file_name()):
+            self._result_uploader.upload(self._output.get_file_name())
 
     def _get_items_in_promotion(self, promotion_url, max_count):
         lst = []
@@ -195,6 +236,8 @@ class Engine():
 
             if max_count is not None and len(lst) >= max_count:
                 break
+
+            time.sleep(random.randint(5, 35))
         
         return lst
 

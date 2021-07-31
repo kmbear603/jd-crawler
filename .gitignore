@@ -5,3 +5,5 @@ config.json
 log.txt
 match.txt
 unmatch.txt
+credentials.json
+token.pickle
