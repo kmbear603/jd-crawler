@@ -2,3 +2,6 @@
 __pycache__/
 *.pyc
 config.json
+log.txt
+match.txt
+unmatch.txt
