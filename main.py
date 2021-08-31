@@ -39,24 +39,51 @@ class Output:
         self._file_name = file_name
         if os.path.isfile(file_name):
             os.remove(file_name)
+        self._promotions = {}
+        self._is_ended = False
     
     def get_file_name(self):
         return self._file_name
 
-    def write(self, promotion):
-        now = datetime.now()
-        time_str = date_time = now.strftime("%Y/%m/%d %H:%M:%S")
+    def _update_promotion_update_time(self, promotion_id):
+        self._promotions[promotion_id]["time"] = datetime.now()
 
-        with open(self._file_name, "a", encoding="utf-8") as f:
-            f.write(time_str + "\n")
-            f.write(promotion["title"] + "\n")
-            f.write(promotion["url"] + "\n")
+    def add_item(self, promotion_id, item):
+        if promotion_id not in self._promotions:
+            return
 
-            if "items" in promotion:
-                for item in promotion["items"]:
-                    f.write(item["title"] + "\n")
+        if "items" not in self._promotions[promotion_id]:
+            self._promotions[promotion_id]["items"] = []
 
-            f.write("\n")
+        self._promotions[promotion_id]["items"].append(item)
+        self._update_promotion_update_time(promotion_id)
+
+    def add_promotion(self, promotion):
+        self._promotions[promotion["id"]] = promotion
+        self._update_promotion_update_time(promotion["id"])
+
+    def complete(self):
+        self._is_ended = True
+        self.flush()
+
+    def flush(self):
+        with open(self._file_name, "w", encoding="utf-8") as f:
+            for promotion_id in self._promotions:
+                write_promotion = self._promotions[promotion_id]
+                time_str = write_promotion["time"].strftime("%Y/%m/%d %H:%M:%S")
+
+                f.write(time_str + "\n")
+                f.write(write_promotion["title"] + "\n")
+                f.write(write_promotion["url"] + "\n")
+
+                if "items" in write_promotion:
+                    for item in write_promotion["items"]:
+                        f.write(item["title"] + "\n")
+
+                f.write("\n")
+            
+            if self._is_ended:
+                f.write("EOF\n")
 
 class MySession:
     def __init__(self, log):
@@ -89,25 +116,41 @@ from GoogleServices import GoogleServices
 from googleapiclient.http import MediaFileUpload
 
 class ResultUploader:
-    def __init__(self):
-        google = GoogleServices()
-        self._drive = google.get_drive_service()
+    def __init__(self, tag):
+        if os.path.isfile("credentials.json"):
+            google = GoogleServices()
+            self._drive = google.get_drive_service()
+        else:
+            self._drive = None
+        self._tag = tag
+        self._folder_id = None
+        self._file_id = None
     
     def upload(self, file_name):
-        now = datetime.now()
-        time_str = date_time = now.strftime("%Y%m%d %H%M%S")
+        if self._drive is None:
+            return False
 
-        folder_id = self._get_id_of_JD_folder()
-        self._upload_task(folder_id, file_name, time_str + ".txt")
+        if self._folder_id is None:
+            self._folder_id = self._get_id_of_JD_folder()
+        self._file_id = self._upload_task(self._folder_id, file_name, "JD" + self._tag + ".txt", self._file_id)
 
-    def _upload_task(self, folder_id, local_file_name, upload_file_name):
+        return True
+
+    def _upload_task(self, folder_id, local_file_name, upload_file_name, file_id):
         file_metadata = {
             "name": upload_file_name,
-            "mimeType": "text/plain",
-            "parents": [ folder_id ]
+            "mimeType": "text/plain"
         }
+
         media = MediaFileUpload(local_file_name, mimetype="text/plain")
-        file = self._drive.files().create(body=file_metadata, media_body=media, fields='id').execute()
+
+        if file_id is not None:
+            file = self._drive.files().update(fileId = file_id, body=file_metadata, media_body=media, fields='id').execute()
+        else:
+            file_metadata["parents"] = [ folder_id ]
+            file = self._drive.files().create(body=file_metadata, media_body=media, fields='id').execute()
+
+        return file["id"]
 
     def _get_id_of_JD_folder(self):
         results = self._drive.files().list(
@@ -127,7 +170,7 @@ class Engine():
         self._output_unmatch = Output("unmatch.txt")
         self._avoid_login_limit = 10
         self._reset_session()
-        self._result_uploader = ResultUploader()
+        self._result_uploader = ResultUploader(datetime.now().strftime("%Y%m%dT%H%M%S"))
 
     def _reset_session(self):
         self._session = MySession(self._log)
@@ -151,7 +194,7 @@ class Engine():
 
             offset = 0
             page = 1
-            while page < 10:
+            while page < 20:
                 #search
                 url = "https://search.jd.com/Search?keyword=" + urllib.parse.quote_plus(keyword)
                 if page > 1:
@@ -167,7 +210,7 @@ class Engine():
                 #get promotions
                 for item in items_on_page:
                     #random
-                    if random.randint(0, 3) == 0:
+                    if random.randint(1, 10) <= 2:
                         continue
 
                     if item["id"] in processed_item_ids:
@@ -185,7 +228,11 @@ class Engine():
                     processed_item_ids[item["id"]] = True
 
                     for promotion in promotions_on_item:
-                        if len(promotion["id"]) == 0 or promotion["id"] in promotion_ids:
+                        if len(promotion["id"]) == 0:
+                            continue
+
+                        if promotion["id"] in promotion_ids:
+                            self._output.add_item(promotion["id"], item)
                             continue
 
                         self._log.write("> " + promotion["id"] + " " + promotion["title"])
@@ -201,15 +248,28 @@ class Engine():
                             found = self._check_fulfil_deduct_pattern(promotion["title"])
 
                         if not found:
-                            self._output_unmatch.write(promotion)
+                            found = self._check_discount_pattern(promotion["title"])
+
+                        if not found:
+                            self._output_unmatch.add_promotion(promotion)
+                            self._output_unmatch.flush()
                             continue
 
-                        promotion["items"] = self._get_items_in_promotion(promotion["url"], 200)
+                        #promotion["items"] = self._get_items_in_promotion(promotion["url"], 200)
 
-                        self._output.write(promotion)
-                    
-                    time.sleep(random.randint(5, 35))
+                        self._output.add_promotion(promotion)
+                        self._output.add_item(promotion["id"], item)
+                        self._output.flush()
+
+                        if os.path.isfile(self._output.get_file_name()):
+                            self._result_uploader.upload(self._output.get_file_name())
+
+                    time.sleep(random.randint(0, 2))
         
+                time.sleep(random.randint(10, 50))
+
+        self._output.complete()
+
         if os.path.isfile(self._output.get_file_name()):
             self._result_uploader.upload(self._output.get_file_name())
 
@@ -249,7 +309,7 @@ class Engine():
                 break
             self._log.write("login page is shown, try again")
             self._reset_session()
-            time.sleep(random.randint(60, 180))
+            time.sleep(random.randint(10, 30))
 
         return self._collect_items_from_search_result(r.text)
 
@@ -290,6 +350,37 @@ class Engine():
 
             lst.append({ "id": id, "title": title, "shop": { "id": shop_id, "name": shop_name } })
         return lst
+
+    def _check_discount_pattern(self, promotion_title):
+        patterns = [ "(总价打(([0-9]+[.])?[0-9]+)折)" ]
+
+        for pattern in patterns:
+            txt_or_tuples = re.findall(pattern, promotion_title)
+
+            if txt_or_tuples is not None and len(txt_or_tuples) > 0:
+                 for txt_or_tuple in txt_or_tuples:
+                    if type(txt_or_tuple) == "string":
+                        txt = txt_or_tuple
+                    else:
+                        txt = txt_or_tuple[0]
+
+                    match = re.match(pattern, txt)
+                    for reg in match.regs:
+                        num_matches = re.findall("(([0-9]+\.)?[0-9]+)", txt)
+                        for num_match in num_matches:
+                            if type(num_match) == "string":
+                                num = num_match
+                            else:
+                                num = num_match[0]
+                            rate = float(num)
+                            if rate <= 5:
+                                return True
+                            break   #need the longest match only
+                        break   #need the longest match only
+                    
+                    break   #need the longest match only
+
+        return False
 
     def _check_fulfil_deduct_pattern(self, promotion_title):
         patterns = [ "满[0-9]+元减[0-9]+元", "每满[0-9]+元，可减[0-9]+元现金" ]
