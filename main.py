@@ -66,10 +66,65 @@ class Output:
         self._is_ended = True
         self.flush()
 
+    def flush_csv(self):
+        with open(self._file_name, "w", encoding="utf-8") as f:
+            f.write("活動")
+            f.write(",")
+            f.write("活動 ID")
+            f.write(",")
+            f.write("產品")
+            f.write(",")
+            f.write("售往海外")
+            f.write(",")
+            f.write("網址")
+            f.write(",")
+            f.write("\n")
+
+            for promotion_id in self._promotions:
+                write_promotion = self._promotions[promotion_id]
+                time_str = write_promotion["time"].strftime("%Y/%m/%d %H:%M:%S")
+
+                if "items" in write_promotion:
+                    for item in write_promotion["items"]:
+                        #if not item["isSoldOversea"]:
+                        #    continue
+
+                        f.write(write_promotion["title"].replace(",", "/").replace("，", "/"))
+                        f.write(",")
+                        
+                        f.write(write_promotion["id"])
+                        f.write(",")
+                        
+                        f.write(item["title"].replace(",", "/").replace("，", "/"))
+                        f.write(",")
+                        
+                        if item["isSoldOversea"]:
+                            f.write("Y")
+                        else:
+                            f.write("")
+                        f.write(",")
+
+                        f.write("https://item.jd.com/" + item["id"] + ".html")
+
+                        f.write("\n")
+            
+            if self._is_ended:
+                f.write("EOF\n")
+
     def flush(self):
         with open(self._file_name, "w", encoding="utf-8") as f:
             for promotion_id in self._promotions:
                 write_promotion = self._promotions[promotion_id]
+
+                count = 0
+                if "items" in write_promotion:
+                    for item in write_promotion["items"]:
+                        if not item["isSoldOversea"]:
+                            count += 1
+
+                if count == 0:
+                    continue
+                
                 time_str = write_promotion["time"].strftime("%Y/%m/%d %H:%M:%S")
 
                 f.write(time_str + "\n")
@@ -78,7 +133,9 @@ class Output:
 
                 if "items" in write_promotion:
                     for item in write_promotion["items"]:
-                        f.write(item["title"] + "\n")
+                        if not item["isSoldOversea"]:
+                            continue
+                        f.write(item["title"] + " " + "https://item.jd.com/" + item["id"] + ".html" + "\n")
 
                 f.write("\n")
             
@@ -323,6 +380,8 @@ class Engine():
 
         json_text = self._session.get(url).text
         obj = json.loads(json_text)
+
+        item["isSoldOversea"] = "soldOversea" in obj and "isSoldOversea" in obj["soldOversea"] and obj["soldOversea"]["isSoldOversea"] == True
 
         for activity in obj["promotion"]["activity"]:
             promoid = activity["promoId"]
